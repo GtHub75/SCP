@@ -2,7 +2,7 @@ name: Surveillance Crous Paris
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # Toutes les 5 min, 24h/24
+    - cron: '*/5 * * * *'  # Toutes les 5 min, 24h/24 (fiabilise par cron-job.org)
   workflow_dispatch:         # Permet aussi de lancer manuellement depuis GitHub
 
 jobs:
@@ -31,9 +31,9 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: python check_crous.py
 
-      - name: Sauvegarder les IDs connus
+      - name: Sauvegarder l'état
         run: |
           git config user.email "crous-bot@github-actions"
           git config user.name "Crous Bot"
-          git add known_ids.json
-          git diff --cached --quiet || git commit -m "chore: mise à jour known_ids.json" && git push
+          git add known_ids.json error_state.json
+          git diff --cached --quiet || git commit -m "chore: mise à jour état" && git push

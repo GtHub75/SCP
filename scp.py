@@ -1,3 +1,4 @@
+import re
 import requests
 import json
 import os
@@ -43,7 +44,35 @@ HEADERS = {
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 KNOWN_IDS_FILE = "known_ids.json"
 ERROR_STATE_FILE = "error_state.json"
-LISTING_BASE_URL = "https://trouverunlogement.lescrous.fr/tools/42/search"
+ACCOMMODATION_BASE_URL = "https://trouverunlogement.lescrous.fr/tools/42/accommodations"
+
+# ── Résidences prioritaires ─────────────────────────────────────
+# Mots-clés séparés par des virgules dans le secret GitHub PRIORITY_KEYWORDS
+# Exemple : "hostater,censier,grands moulins"
+PRIORITY_KEYWORDS = [
+    kw.strip()
+    for kw in os.environ.get("PRIORITY_KEYWORDS", "").split(",")
+    if kw.strip()
+]
+
+
+def is_priority(listing) -> bool:
+    """Retourne True si le logement correspond à un mot-clé prioritaire."""
+    residence = listing.get("residence", {})
+    res_label = (residence.get("label") or "").lower()
+    name      = (listing.get("label") or "").lower()
+    for kw in PRIORITY_KEYWORDS:
+        if kw.lower() in res_label or kw.lower() in name:
+            return True
+    return False
+
+
+def is_paris_intramuros(listing) -> bool:
+    """Retourne True si le logement est à Paris intra-muros (code postal 75xxx).
+    Si l'adresse est absente ou mal formatée, le logement est gardé par sécurité."""
+    address = listing.get("residence", {}).get("address") or ""
+    match = re.search(r'\b(75\d{3})\b', address)
+    return match is not None or address == ""
 
 
 # ── Fetch ───────────────────────────────────────────────────────
@@ -123,7 +152,7 @@ def send_discord_new_listing(listing):
     address   = residence.get("address") or "Adresse inconnue"
     res_label = residence.get("label") or ""
     lid       = listing.get("id", "")
-    link      = f"{LISTING_BASE_URL}#{lid}" if lid else LISTING_BASE_URL
+    link      = f"{ACCOMMODATION_BASE_URL}/{lid}" if lid else ACCOMMODATION_BASE_URL
 
     occupation = listing.get("occupationModes", [])
     if occupation:
@@ -134,19 +163,41 @@ def send_discord_new_listing(listing):
     else:
         prix = "Non renseigne"
 
-    embed = {
-        "title": "Nouveau logement disponible !",
-        "color": 0x1D6FA5,
-        "fields": [
-            {"name": "Nom",     "value": f"{name} ({res_label})" if res_label else name, "inline": False},
-            {"name": "Adresse", "value": address,                                         "inline": False},
-            {"name": "Loyer",   "value": prix,                                            "inline": True},
-            {"name": "Lien",    "value": f"[Voir l'annonce]({link})",                     "inline": False},
-        ],
-        "footer": {"text": "Mon Logement Crous - Surveillance automatique"},
-    }
-    _post_to_discord({"embeds": [embed]})
-    print(f"  Notification envoyee : {name}")
+    if is_priority(listing):
+        payload = {
+            "content": "🚨🟢 **PRIORITAIRE — FONCE !** 🟢🚨 @everyone",
+            "embeds": [{
+                "title": "🟢 Logement prioritaire disponible !",
+                "description": "**Ce logement est dans ta liste prioritaire. Ne tarde pas !**",
+                "color": 0x2ECC71,
+                "fields": [
+                    {"name": "🏠 Résidence", "value": f"{name} ({res_label})" if res_label else name, "inline": False},
+                    {"name": "📍 Adresse",   "value": address,                                         "inline": False},
+                    {"name": "💶 Loyer",     "value": prix,                                            "inline": True},
+                    {"name": "🔗 Lien",      "value": f"[Voir le logement]({link})",                  "inline": False},
+                ],
+                "footer": {"text": "Mon Logement Crous - Surveillance automatique"},
+            }]
+        }
+        print(f"  🚨 Notification PRIORITAIRE envoyee : {name}")
+
+    else:
+        payload = {
+            "embeds": [{
+                "title": "Nouveau logement disponible !",
+                "color": 0xFF3B30,
+                "fields": [
+                    {"name": "Nom",     "value": f"{name} ({res_label})" if res_label else name, "inline": False},
+                    {"name": "Adresse", "value": address,                                         "inline": False},
+                    {"name": "Loyer",   "value": prix,                                            "inline": True},
+                    {"name": "Lien",    "value": f"[Voir le logement]({link})",                   "inline": False},
+                ],
+                "footer": {"text": "Mon Logement Crous - Surveillance automatique"},
+            }]
+        }
+        print(f"  Notification envoyee : {name}")
+
+    _post_to_discord(payload)
 
 
 def send_discord_session_expired():
@@ -233,9 +284,11 @@ def main():
         send_discord_recovered(error_state["error_type"])
         save_error_state({"in_error": False, "error_type": None})
 
-    print(f"  {len(listings)} annonce(s) disponible(s) en ce moment.")
+    # 3. Filtre Paris intra-muros
+    listings = [l for l in listings if is_paris_intramuros(l)]
+    print(f"  {len(listings)} annonce(s) disponible(s) a Paris intra-muros.")
 
-    # 3. Comparaison avec la passe precedente
+    # 4. Comparaison avec la passe precedente
     current_ids = {str(l["id"]) for l in listings}
     known_ids   = load_known_ids()
     new_ids     = current_ids - known_ids
@@ -248,7 +301,7 @@ def main():
     else:
         print("  Aucun nouveau logement.")
 
-    # 4. Sauvegarde
+    # 5. Sauvegarde
     save_known_ids(current_ids)
     print("  Etat sauvegarde.")
 

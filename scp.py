@@ -53,8 +53,10 @@ ACCOMMODATION_BASE_URL = “https://trouverunlogement.lescrous.fr/tools/42/accom
 
 # Exemple : “hostater,censier,grands moulins”
 
+# CORRECTION : .lower() appliqué une fois à l’init, pas à chaque appel
+
 PRIORITY_KEYWORDS = [
-kw.strip()
+kw.strip().lower()
 for kw in os.environ.get(“PRIORITY_KEYWORDS”, “”).split(”,”)
 if kw.strip()
 ]
@@ -64,10 +66,7 @@ def is_priority(listing) -> bool:
 residence = listing.get(“residence”, {})
 res_label = (residence.get(“label”) or “”).lower()
 name      = (listing.get(“label”) or “”).lower()
-for kw in PRIORITY_KEYWORDS:
-if kw.lower() in res_label or kw.lower() in name:
-return True
-return False
+return any(kw in res_label or kw in name for kw in PRIORITY_KEYWORDS)
 
 def is_paris_intramuros(listing) -> bool:
 “”“Retourne True si le logement est à Paris intra-muros (code postal 75xxx).

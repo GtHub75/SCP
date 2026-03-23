@@ -249,8 +249,11 @@ print("  Notification de retour a la normale envoyee sur Discord.")
 ```
 
 def _post_to_discord(payload):
+try:
 resp = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
 resp.raise_for_status()
+except requests.exceptions.RequestException as e:
+print(f”  [WARN] Echec envoi Discord (non bloquant) : {e}”)
 
 # ── Programme principal ─────────────────────────────────────────
 

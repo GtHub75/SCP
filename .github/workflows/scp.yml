@@ -2,22 +2,23 @@ name: SCP
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # Fiabilise par cron-job.org (1 min)
-  workflow_dispatch:         # Permet aussi de lancer manuellement depuis GitHub
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   check-listings:
     runs-on: ubuntu-latest
+
     concurrency:
-      group: crous-check        # Empêche 2 runs en parallèle
-      cancel-in-progress: false # Le run en cours termine, le suivant attend
+      group: crous-check
+      cancel-in-progress: false
+
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
     steps:
       - name: Checkout du dépôt
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -37,12 +38,19 @@ jobs:
         run: python scp.py
 
       - name: Sauvegarder l'état
-        if: always()   # Tourne aussi en cas d'échec pour sauvegarder error_state.json
+        if: always()
         run: |
           git config user.email "crous-bot@github-actions"
           git config user.name "SCP Bot"
+
           [ -f known_ids.json ] || echo '[]' > known_ids.json
           [ -f error_state.json ] || echo '{"in_error": false, "error_type": null}' > error_state.json
-          git pull --rebase origin ${{ github.ref_name }}
+
           git add known_ids.json error_state.json
-          git diff --cached --quiet || (git commit -m "chore: mise à jour état" && git push)
+
+          if git diff --cached --quiet; then
+            echo "Aucun changement"
+          else
+            git commit -m "chore: mise à jour état"
+            git push
+          fi

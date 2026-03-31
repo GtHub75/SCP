@@ -1,4 +1,3 @@
-import re
 import requests
 import json
 import os
@@ -58,11 +57,6 @@ def is_priority(listing) -> bool:
     res_label = (residence.get("label") or "").lower()
     name = (listing.get("label") or "").lower()
     return any(kw in res_label or kw in name for kw in PRIORITY_KEYWORDS)
-
-def is_paris_intramuros(listing) -> bool:
-    address = listing.get("residence", {}).get("address") or ""
-    match = re.search(r'\b(75\d{3})\b', address)
-    return match is not None or address == ""
 
 # ── Fetch ─────────────────────────────────
 class SessionExpiredError(Exception):
@@ -137,6 +131,9 @@ def _post_to_discord(payload):
         print(f"[WARN] Échec envoi Discord (non bloquant) : {e}")
 
 def send_discord_new_listing(listing):
+    if not is_priority(listing):
+        return  # Sécurité : uniquement priorité
+
     name = listing.get("label") or "Logement sans nom"
     residence = listing.get("residence", {})
     address = residence.get("address") or "Adresse inconnue"
@@ -153,39 +150,24 @@ def send_discord_new_listing(listing):
     else:
         prix = "Non renseigné"
 
-    if is_priority(listing):
-        payload = {
-            "content": "🚨🟢 **PRIORITAIRE — FONCE !** 🟢🚨 @everyone",
-            "embeds": [{
-                "title": "🟢 Logement prioritaire disponible !",
-                "description": "**Ce logement est dans ta liste prioritaire. Ne tarde pas !**",
-                "color": 0x2ECC71,
-                "fields": [
-                    {"name": "🏠 Résidence", "value": f"{name} ({res_label})" if res_label else name, "inline": False},
-                    {"name": "📍 Adresse", "value": address, "inline": False},
-                    {"name": "💶 Loyer", "value": prix, "inline": True},
-                    {"name": "🔗 Lien", "value": f"[Voir le logement]({link})", "inline": False},
-                ],
-                "footer": {"text": "Mon Logement Crous - Surveillance automatique"},
-            }]
-        }
-        print(f"🚨 Notification PRIORITAIRE envoyée : {name}")
-    else:
-        payload = {
-            "embeds": [{
-                "title": "Nouveau logement disponible !",
-                "color": 0xFF3B30,
-                "fields": [
-                    {"name": "Nom", "value": f"{name} ({res_label})" if res_label else name, "inline": False},
-                    {"name": "Adresse", "value": address, "inline": False},
-                    {"name": "Loyer", "value": prix, "inline": True},
-                    {"name": "Lien", "value": f"[Voir le logement]({link})", "inline": False},
-                ],
-                "footer": {"text": "Mon Logement Crous - Surveillance automatique"},
-            }]
-        }
-        print(f"Notification envoyée : {name}")
+    payload = {
+        # 🚨 Ce texte apparaîtra directement dans la notification mobile
+        "content": f"🚨 URGENT — {name} disponible ! 🚨 @everyone",
+        "embeds": [{
+            "title": f"Logement prioritaire disponible !",
+            "description": "**Ce logement est dans ta liste prioritaire. Ne tarde pas !**",
+            "color": 0x2ECC71,
+            "fields": [
+                {"name": "🏠 Résidence", "value": f"{name} ({res_label})" if res_label else name, "inline": False},
+                {"name": "📍 Adresse", "value": address, "inline": False},
+                {"name": "💶 Loyer", "value": prix, "inline": True},
+                {"name": "🔗 Lien", "value": f"[Voir le logement]({link})", "inline": False},
+            ],
+            "footer": {"text": "Mon Logement Crous - Surveillance automatique"},
+        }]
+    }
 
+    print(f"🚨 Notification PRIORITAIRE envoyée : {name}")
     _post_to_discord(payload)
 
 def send_discord_session_expired():
@@ -231,46 +213,43 @@ def send_discord_recovered(error_type):
 
 # ── Programme principal ─────────────────
 def main():
-    print("Vérification des annonces Crous Paris…")
+    print("Vérification des annonces Crous…")
     error_state = load_error_state()
 
-    # 1. Récupération annonces
     try:
         listings = fetch_listings()
     except SessionExpiredError as e:
         print(f"Session expirée : {e}")
-        send_discord_session_expired()
+        if not error_state["in_error"] or error_state["error_type"] != "session":
+            send_discord_session_expired()
         save_error_state({"in_error": True, "error_type": "session"})
         sys.exit(1)
     except RuntimeError as e:
         print(f"Erreur : {e}")
-        send_discord_error(str(e))
+        if not error_state["in_error"] or error_state["error_type"] != "error":
+            send_discord_error(str(e))
         save_error_state({"in_error": True, "error_type": "error"})
         sys.exit(1)
 
-    # 2. Retour à la normale si erreur précédente
     if error_state["in_error"]:
         send_discord_recovered(error_state["error_type"])
         save_error_state({"in_error": False, "error_type": None})
 
-    # 3. Filtre Paris intra-muros
-    listings = [l for l in listings if is_paris_intramuros(l)]
-    print(f"{len(listings)} annonce(s) disponible(s) à Paris intra-muros.")
-
-    # 4. Comparaison avec la passe précédente
     current_ids = {str(l["id"]) for l in listings}
     known_ids = load_known_ids()
     new_ids = current_ids - known_ids
 
-    if new_ids:
-        print(f"{len(new_ids)} nouveau(x) logement(s) détecté(s) !")
-        for listing in listings:
-            if str(listing["id"]) in new_ids:
-                send_discord_new_listing(listing)
+    priority_listings = [
+        l for l in listings
+        if str(l["id"]) in new_ids and is_priority(l)
+    ]
+    if priority_listings:
+        print(f"{len(priority_listings)} logement(s) prioritaire(s) détecté(s) !")
+        for listing in priority_listings:
+            send_discord_new_listing(listing)
     else:
-        print("Aucun nouveau logement.")
+        print("Aucun logement prioritaire.")
 
-    # 5. Sauvegarde
     save_known_ids(current_ids)
     print("État sauvegardé.")
 
